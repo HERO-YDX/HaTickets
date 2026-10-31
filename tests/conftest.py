@@ -30,6 +30,23 @@ sys.modules["uiautomator2"] = _mock_uiautomator2
 sys.modules["uiautomator2.exceptions"] = _real_u2_exceptions
 
 
+@pytest.fixture(autouse=True)
+def _no_real_device_side_effects():
+    """Keep tests from shelling out to a real ``adb`` or ``osascript``.
+
+    With adb installed and a phone attached, ``adb shell pm dump cn.damai``
+    runs into its 3s timeout on every bot instantiation; restock/success
+    notifications would pop up real macOS banners.
+    """
+    with patch(
+        "mobile.damai_app.orchestrator.detect_damai_app_version", return_value=None
+    ), patch(
+        "mobile.damai_app.recovery_strategies.detect_damai_app_version",
+        return_value=None,
+    ), patch("mobile.damai_app.restock_watcher.run_captured"):
+        yield
+
+
 @pytest.fixture
 def temp_dir() -> Generator[Path, None, None]:
     """Create a temporary directory for tests."""

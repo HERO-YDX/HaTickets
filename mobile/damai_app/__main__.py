@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover — `python -m damai_app`（cwd=mobile/�
     from config import SERIAL_OVERRIDE_ENV_VAR  # type: ignore[no-redef]
 
 from . import DamaiBot, logger
+from .restock_watcher import notify_user
 from .run_report import (
     DEFAULT_RESULT_JSON,
     EXIT_CONFIG_OR_DEVICE_ERROR,
@@ -98,6 +99,14 @@ def main(argv=None) -> int:
         else:
             try:
                 success = bot.run_with_retry(max_retries=3)
+                if (
+                    not success
+                    and bot.config.restock_watch is True
+                    and not bot._terminal_failure_reason
+                ):
+                    success = bot.watch_restock()
+                if success and bot.config.if_commit_order is True:
+                    notify_user("HaTickets 抢票成功", "请立即打开大麦完成支付")
             except KeyboardInterrupt:
                 exit_code, outcome = EXIT_INTERRUPTED, "interrupted"
                 terminal_reason = "keyboard_interrupt"

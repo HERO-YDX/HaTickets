@@ -54,12 +54,12 @@ class SaleWaiterMixin:
         except Exception:
             return False
 
-        texts = [
-            text.strip()
-            for text in self._collect_descendant_texts(purchase_bar)
-            if text.strip()
-        ]
-        merged = normalize_text("".join(texts))
+        return self._cta_texts_ready(self._collect_descendant_texts(purchase_bar))
+
+    @staticmethod
+    def _cta_texts_ready(texts):
+        """Decide from the purchase-bar texts whether sale has opened."""
+        merged = normalize_text("".join(text.strip() for text in texts if text.strip()))
         if not merged:
             return False
         if any(normalize_text(keyword) in merged for keyword in _CTA_BLOCKED_KEYWORDS):
@@ -80,6 +80,21 @@ class SaleWaiterMixin:
             "立即提交",
             "提交订单",
         )
+        snapshot = self._page_snapshot()
+        if snapshot is not None:
+            # 单次 dump 本地判断（~115ms）替代最多 8 次串行 u2 查询（详情页上每次
+            # 查不存在的元素 ~250ms，整轮可达 1-2s）。
+            matched = snapshot.find_text(ready_texts)
+            if matched is not None:
+                self._last_sale_ready_text = matched
+                return True
+            if snapshot.has_id("cn.damai:id/project_detail_perform_price_flowlayout"):
+                return not self.is_reservation_sku_mode()
+            bar_id = "cn.damai:id/trade_project_detail_purchase_status_bar_container_fl"
+            if snapshot.has_id(bar_id):
+                return self._cta_texts_ready(snapshot.texts_inside_id(bar_id))
+            return False
+
         for text in ready_texts:
             if self._has_element(
                 ANDROID_UIAUTOMATOR,

@@ -44,6 +44,10 @@ _PRICE_UNAVAILABLE_TAGS = {
     "暂不可售",
 }
 
+# Substrings on a price card that mean the tier cannot be bought right now.
+# Matched as substrings so "缺货登记" also counts.
+_PRICE_SOLD_OUT_KEYWORDS = ("缺货", "售罄", "无票", "暂不可售", "不可选")
+
 
 # ---------------------------------------------------------------------------
 # Diagnostic exceptions and price-card data class (P1 #31)
@@ -595,9 +599,83 @@ class PriceSelector:
 
         return None
 
+    def _fallback_enabled(self):
+        """Check card availability before clicking: fallbacks configured or restock watch on."""
+        value = getattr(self._config, "price_fallback_indexes", None)
+        if value == "any" or isinstance(value, list):
+            return True
+        return getattr(self._config, "restock_watch", False) is True
+
+    def _fallback_candidate_indexes(self, card_count):
+        """price_index first, then the configured fallbacks, deduplicated and in range."""
+        primary = self._config.price_index
+        fallback = getattr(self._config, "price_fallback_indexes", None)
+        if fallback == "any":
+            rest = range(card_count)
+        elif isinstance(fallback, list):
+            rest = fallback
+        else:
+            rest = ()
+        candidates = []
+        for index in (primary, *rest):
+            if 0 <= index < card_count and index not in candidates:
+                candidates.append(index)
+        return candidates
+
+    @staticmethod
+    def _price_card_unavailable(option):
+        if option.get("tag"):
+            return True
+        return any(
+            keyword in text
+            for text in option.get("raw_texts") or ()
+            for keyword in _PRICE_SOLD_OUT_KEYWORDS
+        )
+
+    def _select_price_with_fallback(self):
+        """Click the first purchasable tier among price_index + price_fallback_indexes.
+
+        Reads the cards before clicking so a sold-out card (whose tap may open
+        the "缺货登记" flow) is never touched. Returns True once a tier is
+        clicked, None when the cards cannot be read (caller uses the normal
+        path), and raises SoldOutError when every acceptable tier is sold out.
+        """
+        bot = self._bot
+        xml_root = bot._dump_hierarchy_xml()
+        if xml_root is None:
+            return None
+        options = self._get_visible_price_options_from_xml(xml_root, allow_ocr=False)
+        if not options:
+            return None
+
+        by_index = {option["index"]: option for option in options}
+        candidates = self._fallback_candidate_indexes(len(options))
+        for index in candidates:
+            option = by_index[index]
+            label = option.get("text") or f"index={index}"
+            if self._price_card_unavailable(option):
+                logger.info(f"票档不可售，跳过: {label} {option.get('raw_texts')}")
+                continue
+            if index != self._config.price_index:
+                logger.warning(
+                    f"目标票档(price_index={self._config.price_index})不可售，"
+                    f"改选备选票档: {label} (index={index})"
+                )
+            if self._click_price_card_element(index) or bot._click_visible_price_option(
+                index
+            ):
+                logger.info(f"已选择票档: {label} (index={index})")
+                return True
+            return False
+        raise SoldOutError(f"所有可接受票档均不可售（候选 index={candidates}）")
+
     def _select_price_option(self, cached_coords=None):
         """Select the configured price using fast config-driven logic first, then OCR-heavy fallbacks."""
         bot = self._bot
+        if self._fallback_enabled():
+            fallback_result = self._select_price_with_fallback()
+            if fallback_result is not None:
+                return fallback_result
         fast_result = bot._select_price_option_fast(cached_coords=cached_coords)
         if fast_result is not None:
             return fast_result

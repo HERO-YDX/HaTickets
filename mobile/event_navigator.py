@@ -572,6 +572,8 @@ class EventNavigator:
                 except Exception:
                     return False
 
+            # 大麦需要先消化输入（出联想词）再接受回车；立刻回车会被吞掉。
+            time.sleep(0.4)
             if not bot._press_keycode_safe(66, context="提交搜索关键词"):
                 return False
             if bot._has_element(ANDROID_UIAUTOMATOR, 'new UiSelector().text("演出")'):
@@ -583,9 +585,14 @@ class EventNavigator:
                 time.sleep(0.1)
             try:
                 deadline = time.time() + 3.5
+                resubmit_at = time.time() + 1.5
                 while time.time() < deadline:
                     if bot._find_all(By.ID, "cn.damai:id/ll_search_item"):
                         break
+                    if resubmit_at is not None and time.time() >= resubmit_at:
+                        # 回车仍可能被吞（停在联想词页），补按一次。
+                        bot._press_keycode_safe(66, context="补按回车提交搜索")
+                        resubmit_at = None
                     time.sleep(0.04)
                 else:
                     raise TimeoutException("搜索结果加载超时")

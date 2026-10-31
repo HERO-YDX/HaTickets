@@ -218,7 +218,7 @@ class TestU2BackendAdapters:
         assert bot.driver is mock_u2_driver
         assert bot.d is mock_u2_driver
 
-    def test_click_coordinates_u2_uses_click(self):
+    def test_click_coordinates_u2_uses_raw_touch(self):
         cfg = Config(
             app_package="cn.damai",
             app_activity=".launcher.splash.SplashMainActivity",
@@ -236,7 +236,9 @@ class TestU2BackendAdapters:
         bot.driver = bot.d
 
         bot._click_coordinates(10, 20, duration=30)
-        bot.d.click.assert_called_once_with(10, 20)
+        bot.d.touch.down.assert_called_once_with(10, 20)
+        bot.d.touch.down.return_value.up.assert_called_once_with(10, 20)
+        bot.d.click.assert_not_called()
 
     def test_has_element_u2_uses_selector_exists(self):
         cfg = Config(
@@ -553,7 +555,7 @@ class TestAutoNavigation:
                     result = bot._exit_non_target_event_context({"state": "sku_page"})
 
         assert result["state"] == "search_page"
-        assert bot.d.press.call_count == 2
+        assert bot.d.shell.call_count == 2
 
     def test_discover_target_event_exits_wrong_sku_page_before_search(self, bot):
         bot.config.keyword = "余佳运 演唱会"
@@ -1854,6 +1856,30 @@ class TestPageStateHelpers:
         with patch.object(bot, "_find", side_effect=RuntimeError("missing")):
             assert bot._click_sku_buy_button_element() is False
 
+    @pytest.mark.parametrize("restock_watch, dumps", [(False, 1), (True, 0)])
+    def test_sold_out_price_sets_outcome_and_skips_dump_when_watching(
+        self, bot, restock_watch, dumps
+    ):
+        from mobile.price_selector import SoldOutError
+
+        bot.config.rush_mode = True
+        bot.config.restock_watch = restock_watch
+        initial_probe = {
+            "state": "sku_page",
+            "price_container": True,
+            "reservation_mode": False,
+            "price_coords": (300, 1200),
+            "buy_button_coords": (540, 2100),
+        }
+        with patch.object(
+            bot, "_select_price_option", side_effect=SoldOutError("all gone")
+        ), patch.object(bot, "_has_element", return_value=False), patch.object(
+            bot, "_save_price_failure_dump"
+        ) as dump:
+            assert bot.run_ticket_grabbing(initial_page_probe=initial_probe) is False
+        assert bot._last_run_outcome == "sold_out"
+        assert dump.call_count == dumps
+
     def test_rush_mode_retries_sku_buy_with_element_click_fallback(self, bot):
         bot.config.rush_mode = True
         bot.config.if_commit_order = False
@@ -3118,7 +3144,7 @@ class TestFastRetry:
                         initial_probe=unknown_probe
                     )
 
-        bot.d.press.assert_called_once_with("back")
+        bot.d.shell.assert_called_once_with("input keyevent 4")
         assert result["state"] == "detail_page"
 
     def test_fast_retry_from_detail_page(self, bot):
@@ -4634,16 +4660,16 @@ class TestGetCurrentActivityExceptionPath:
 
 
 class TestClickHelpers:
-    def test_click_element_center_calls_u2_click(self, bot):
+    def test_click_element_center_calls_u2_touch(self, bot):
         el = _make_mock_element(x=100, y=200, width=50, height=40)
         bot._click_element_center(el)
-        bot.d.click.assert_called_with(125, 220)
+        bot.d.touch.down.assert_called_with(125, 220)
 
     def test_burst_click_element_center_calls_multiple_times(self, bot):
         el = _make_mock_element(x=100, y=200, width=50, height=40)
         with patch("mobile.ui_primitives.time.sleep") as mock_sleep:
             bot._burst_click_element_center(el, count=3, interval_ms=10)
-        assert bot.d.click.call_count >= 3
+        assert bot.d.touch.down.call_count >= 3
         assert mock_sleep.call_count == 2  # sleeps between calls
 
     def test_burst_click_element_center_no_sleep_when_zero_interval(self, bot):
@@ -4653,11 +4679,18 @@ class TestClickHelpers:
             bot._burst_click_element_center(el, count=2, interval_ms=0)
         assert mock_sleep.call_count == 0
 
-    def test_burst_click_coordinates_calls_u2_click(self, bot):
-        bot.d.click.reset_mock()
+    def test_burst_click_coordinates_batches_shell_taps(self, bot):
+        bot.d.shell.reset_mock()
+        bot._burst_click_coordinates(100, 200, count=2, interval_ms=10)
+        bot.d.shell.assert_called_once_with("input tap 100 200; input tap 100 200")
+        bot.d.touch.down.assert_not_called()
+
+    def test_burst_click_coordinates_falls_back_when_shell_fails(self, bot):
+        bot.d.shell = Mock(side_effect=RuntimeError("adb gone"))
+        bot.d.touch.down.reset_mock()
         with patch("mobile.ui_primitives.time.sleep"):
             bot._burst_click_coordinates(100, 200, count=2, interval_ms=10)
-        assert bot.d.click.call_count == 2
+        assert bot.d.touch.down.call_count == 2
 
     def test_burst_click_coordinates_no_sleep_for_single(self, bot):
         bot.d.click.reset_mock()

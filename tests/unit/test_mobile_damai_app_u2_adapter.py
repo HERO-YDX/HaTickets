@@ -147,7 +147,16 @@ class TestU2SetupAndCoreAdapters:
         bot.d = Mock()
         bot.driver = bot.d
         assert bot._press_keycode_safe(66) is True
-        bot.d.press.assert_called_once_with("enter")
+        bot.d.shell.assert_called_once_with("input keyevent 66")
+        bot.d.press.assert_not_called()
+
+    def test_press_keycode_safe_u2_falls_back_when_shell_fails(self):
+        bot = DamaiBot(config=_u2_config(), setup_driver=False)
+        bot.d = Mock()
+        bot.d.shell = Mock(side_effect=RuntimeError("no shell"))
+        bot.driver = bot.d
+        assert bot._press_keycode_safe(4) is True
+        bot.d.press.assert_called_once_with("back")
 
     def test_container_find_elements_u2_child_scan(self):
         bot = DamaiBot(config=_u2_config(), setup_driver=False)
@@ -279,6 +288,24 @@ class TestU2SearchHotPath:
              patch("mobile.damai_app.time.sleep"), \
              patch("mobile.damai_app.time.time", side_effect=[0.0, 4.0] + [99.0] * 20):
             assert bot._submit_search_keyword() is False
+
+    def test_submit_search_keyword_resubmits_enter_once_when_swallowed(self):
+        bot = DamaiBot(config=_u2_config(), setup_driver=False)
+        search_input = Mock()
+        search_input.set_text = Mock()
+        clock = iter([0.0, 0.0, 0.5, 2.0, 2.1, 2.2])
+        with patch.object(bot, "_wait_for_element", return_value=search_input), \
+             patch.object(bot, "_click_element_center"), \
+             patch.object(bot, "_read_element_text", side_effect=["", ""]), \
+             patch.object(bot, "_press_keycode_safe", return_value=True) as press, \
+             patch.object(bot, "_has_element", return_value=False), \
+             patch.object(bot, "_find_all", side_effect=[[], [], [Mock()]]), \
+             patch("mobile.event_navigator.time.sleep"), \
+             patch("mobile.event_navigator.time.time", side_effect=lambda: next(clock, 2.3)):
+            assert bot._submit_search_keyword() is True
+
+        enter_presses = [c for c in press.call_args_list if c.args[0] == 66]
+        assert len(enter_presses) == 2
 
     def test_open_target_from_search_results_returns_details_when_opened(self):
         bot = DamaiBot(config=_u2_config(), setup_driver=False)

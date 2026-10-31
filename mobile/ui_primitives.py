@@ -30,6 +30,58 @@ logger = get_logger(__name__)
 ANDROID_UIAUTOMATOR = "android_uiautomator"
 
 
+class PageSnapshot:
+    """One parsed dump_hierarchy() for cheap local lookups.
+
+    On Damai pages a u2 lookup for a *missing* element costs ~250ms (the pages
+    never go idle), while a full dump costs ~115ms (Pixel 6 measurement).
+    Polling loops therefore check all their conditions against one snapshot
+    instead of issuing several serial u2 queries per round.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self.ids = set()
+        self.texts = []
+        for node in root.iter("node"):
+            rid = node.get("resource-id")
+            if rid:
+                self.ids.add(rid)
+            text = (node.get("text") or "").strip()
+            if text:
+                self.texts.append(text)
+
+    def has_id(self, resource_id):
+        return resource_id in self.ids
+
+    def find_text(self, needles):
+        """Return the first needle contained in any node text, else None."""
+        for needle in needles:
+            if any(needle in text for text in self.texts):
+                return needle
+        return None
+
+    def has_text(self, needles):
+        return self.find_text(needles) is not None
+
+    def texts_inside_id(self, resource_id):
+        """Texts of all nodes inside the bounds of the first node with *resource_id*."""
+        outer = None
+        for node in self.root.iter("node"):
+            if node.get("resource-id") == resource_id:
+                outer = UIPrimitives._parse_bounds(node.get("bounds", ""))
+                break
+        if outer is None:
+            return []
+        texts = []
+        for node in self.root.iter("node"):
+            inner = UIPrimitives._parse_bounds(node.get("bounds", ""))
+            text = (node.get("text") or "").strip()
+            if text and inner is not None and UIPrimitives._bounds_inside(inner, outer):
+                texts.append(text)
+        return texts
+
+
 class UIPrimitives:
     """Mixin providing low-level UI interaction methods.
 
@@ -183,7 +235,9 @@ class UIPrimitives:
             return
 
         if duration <= 50:
-            self.d.click(x, y)
+            # d.click() goes through UiDevice.click, which holds the press for
+            # ~100ms (~166ms per call measured); raw down/up takes ~88ms.
+            self.d.touch.down(x, y).up(x, y)
         else:
             self.d.long_click(x, y, max(duration / 1000, 0.05))
 
@@ -211,6 +265,15 @@ class UIPrimitives:
 
     def _burst_click_coordinates(self, x, y, count=2, interval_ms=35, duration=30):
         """Click a fixed coordinate repeatedly."""
+        if self._using_u2() and count > 1:
+            # One shell call with N `input tap`s (~55ms per tap measured) beats N
+            # separate u2 clicks; the taps are naturally spaced by process startup.
+            tap = f"input tap {int(x)} {int(y)}"
+            try:
+                self.d.shell("; ".join([tap] * count))
+                return
+            except Exception:
+                pass
         for attempt in range(count):
             self._click_coordinates(x, y, duration=duration)
             if attempt < count - 1 and interval_ms > 0:
@@ -325,8 +388,13 @@ class UIPrimitives:
             if not self._using_u2():
                 self.driver.press_keycode(keycode)
             else:
-                u2_key = {4: "back", 66: "enter"}.get(keycode, keycode)
-                self.d.press(u2_key)
+                # u2 key injection fails on Android 16 (InputManager.getInstance
+                # was removed), so prefer the shell; fall back to u2 for stubs.
+                try:
+                    self.d.shell(f"input keyevent {int(keycode)}")
+                except Exception:
+                    u2_key = {4: "back", 66: "enter"}.get(keycode, keycode)
+                    self.d.press(u2_key)
             return True
         except Exception as exc:
             suffix = f"（{context}）" if context else ""
@@ -674,6 +742,11 @@ class UIPrimitives:
             return ET.fromstring(self.d.dump_hierarchy())
         except Exception:
             return None
+
+    def _page_snapshot(self):
+        """Return a :class:`PageSnapshot` of the current UI, or None if the dump failed."""
+        root = self._dump_hierarchy_xml()
+        return PageSnapshot(root) if root is not None else None
 
     def _get_current_activity(self):
         """获取当前 Activity，失败时返回空字符串。"""

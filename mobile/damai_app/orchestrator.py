@@ -49,6 +49,7 @@ from .coords_cache import CoordsCacheMixin
 from .delegators import DelegatorsMixin
 from .purchase_flow import PurchaseFlowMixin
 from .recovery_strategies import RecoveryStrategiesMixin
+from .restock_watcher import RestockWatcherMixin
 from .sale_waiter import SaleWaiterMixin
 from .state_probe import StateProbeMixin
 
@@ -57,6 +58,7 @@ class DamaiBot(
     SaleWaiterMixin,
     PurchaseFlowMixin,
     RecoveryStrategiesMixin,
+    RestockWatcherMixin,
     CoordsCacheMixin,
     StateProbeMixin,
     DelegatorsMixin,
@@ -382,12 +384,24 @@ class DamaiBot(
     ):
         """Wait for the detail-page CTA to open either sku or confirm page."""
         if self.config.rush_mode:
-            # 极速模式：每次轮询只用 1 个 ID 选择器（~60ms/轮），替代 4 个选择器（~240ms/轮）。
+            # 极速模式：每轮一次 dump_hierarchy 本地判断（~115ms），替代两次 u2 查询
+            # （大麦页面上查「不存在」的元素 ~250ms/次）；dump 失败时回落 u2 查询。
             # 先检查 sku（更常见的转换目标），再检查确认页 checkbox。
             skip_reservation_check = not self.config.if_commit_order
             deadline = time.time() + timeout
             while time.time() < deadline:
-                if self._has_element(By.ID, "cn.damai:id/layout_sku"):
+                snapshot = self._page_snapshot()
+                if snapshot is not None:
+                    has_sku = snapshot.has_id("cn.damai:id/layout_sku")
+                    has_checkbox = not has_sku and snapshot.has_id(
+                        "cn.damai:id/checkbox"
+                    )
+                else:
+                    has_sku = self._has_element(By.ID, "cn.damai:id/layout_sku")
+                    has_checkbox = not has_sku and self._has_element(
+                        By.ID, "cn.damai:id/checkbox"
+                    )
+                if has_sku:
                     return {
                         "state": "sku_page",
                         "price_container": True,
@@ -395,7 +409,7 @@ class DamaiBot(
                         if skip_reservation_check
                         else self.is_reservation_sku_mode(),
                     }
-                if self._has_element(By.ID, "cn.damai:id/checkbox"):
+                if has_checkbox:
                     return {"state": "order_confirm_page", "submit_button": True}
                 time.sleep(poll_interval)
             if fallback_probe_on_timeout:
@@ -434,10 +448,15 @@ class DamaiBot(
     def _wait_for_submit_ready(self, timeout=1.6, poll_interval=0.04):
         """Wait until the confirm-page submit button appears."""
         if self.config.rush_mode:
-            # 极速模式：单 ID 选择器轮询（~60ms/轮 vs 3选择器 ~180ms/轮）。
+            # 极速模式：每轮一次 dump_hierarchy 本地判断（~115ms），比查一个尚未出现
+            # 的 u2 元素（~250ms）更快；dump 失败时回落 u2 查询。
             deadline = time.time() + timeout
             while time.time() < deadline:
-                if self._has_element(By.ID, "cn.damai:id/checkbox"):
+                snapshot = self._page_snapshot()
+                if snapshot is not None:
+                    if snapshot.has_id("cn.damai:id/checkbox"):
+                        return True
+                elif self._has_element(By.ID, "cn.damai:id/checkbox"):
                     return True
                 time.sleep(poll_interval)
             return False
@@ -927,7 +946,10 @@ class DamaiBot(
                 try:
                     selected = self._select_price_option(cached_coords=price_coords)
                 except SoldOutError as exc:
-                    self._save_price_failure_dump(reason=f"sold_out: {exc}")
+                    self._set_run_outcome("sold_out")
+                    # 盯回流时每轮都会命中售罄，不重复落盘诊断文件。
+                    if not self.config.restock_watch:
+                        self._save_price_failure_dump(reason=f"sold_out: {exc}")
                     logger.error("票档已售罄，停止本轮抢票: %s", exc)
                     return False
                 except PriceSelectorError as exc:

@@ -4,6 +4,7 @@
 import time
 from unittest.mock import Mock, patch
 
+from mobile.ui_primitives import PageSnapshot
 from mobile.fast_pipeline import (
     FastPipeline,
     _PIPELINE_DEADLINE_S,
@@ -424,11 +425,43 @@ class TestPipelineHelperEdgeCases:
         assert result is None
         bot._wait_for_purchase_entry_result.assert_not_called()
 
+    def _snapshot_bot(self, xml):
+        import xml.etree.ElementTree as ET
+
+        bot = Mock()
+        bot._page_snapshot = Mock(return_value=PageSnapshot(ET.fromstring(xml)))
+        bot._has_element = Mock(side_effect=AssertionError("no u2 lookups expected"))
+        return bot
+
+    def test_confirm_page_ready_snapshot_checkbox_id(self):
+        fp = FastPipeline(Mock(), Mock(), probe=False, guard=Mock())
+        fp.set_bot(
+            self._snapshot_bot(
+                '<hierarchy><node resource-id="cn.damai:id/checkbox" text="" /></hierarchy>'
+            )
+        )
+        assert fp._confirm_page_ready() is True
+
+    def test_confirm_page_ready_snapshot_text(self):
+        fp = FastPipeline(Mock(), Mock(), probe=False, guard=Mock())
+        fp.set_bot(
+            self._snapshot_bot('<hierarchy><node text="立即提交" /></hierarchy>')
+        )
+        assert fp._confirm_page_ready() is True
+
+    def test_confirm_page_ready_snapshot_false(self):
+        fp = FastPipeline(Mock(), Mock(), probe=False, guard=Mock())
+        fp.set_bot(
+            self._snapshot_bot('<hierarchy><node text="选择票档" /></hierarchy>')
+        )
+        assert fp._confirm_page_ready() is False
+
     def test_confirm_page_ready_on_checkbox_id(self):
         device = Mock()
         config = Mock()
         fp = FastPipeline(device, config, probe=False, guard=Mock())
         bot = Mock()
+        bot._page_snapshot = Mock(return_value=None)
         bot._has_element = Mock(return_value=True)
         bot._attendee_checkbox_elements = Mock(return_value=[])
         fp.set_bot(bot)
@@ -440,6 +473,7 @@ class TestPipelineHelperEdgeCases:
         config = Mock()
         fp = FastPipeline(device, config, probe=False, guard=Mock())
         bot = Mock()
+        bot._page_snapshot = Mock(return_value=None)
         bot._has_element = Mock(side_effect=[False, False, False, False])
         bot._attendee_checkbox_elements = Mock(return_value=[Mock()])
         fp.set_bot(bot)
@@ -451,6 +485,7 @@ class TestPipelineHelperEdgeCases:
         config = Mock()
         fp = FastPipeline(device, config, probe=False, guard=Mock())
         bot = Mock()
+        bot._page_snapshot = Mock(return_value=None)
         bot._has_element = Mock(return_value=False)
         bot._attendee_checkbox_elements = Mock(return_value=[])
         fp.set_bot(bot)

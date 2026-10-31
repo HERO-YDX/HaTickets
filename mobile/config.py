@@ -77,6 +77,10 @@ KNOWN_CONFIG_KEYS = frozenset(
         "rush_skip_session",
         "rush_skip_price_dump",
         "rush_aggressive_retry",
+        "price_fallback_indexes",
+        "restock_watch",
+        "restock_interval_s",
+        "restock_max_minutes",
     }
 )
 
@@ -647,6 +651,23 @@ def read_runtime_mode(config_path=None):
     )
 
 
+RESTOCK_MIN_INTERVAL_S = 10
+
+
+def validate_price_fallback_indexes(value):
+    """null、"any"，或非负整数列表（按优先级排列的备选票档索引）。"""
+    if value is None or value == "any":
+        return
+    if not isinstance(value, list) or not all(
+        isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        for item in value
+    ):
+        raise ValueError(
+            "price_fallback_indexes 必须是 null、\"any\" 或非负整数列表，"
+            f"实际值: {value!r}"
+        )
+
+
 class Config:
     def __init__(
         self,
@@ -673,6 +694,10 @@ class Config:
         target_title=None,
         target_venue=None,
         serial=None,
+        price_fallback_indexes=None,
+        restock_watch=False,
+        restock_interval_s=45,
+        restock_max_minutes=120,
         # Deprecated Appium-era params — accepted for config file compat, ignored
         driver_backend="u2",
         server_url=None,
@@ -794,6 +819,27 @@ class Config:
             if not isinstance(_value, bool):
                 raise ValueError(f"{_name} 必须是布尔值，实际值: {_value!r}")
 
+        validate_price_fallback_indexes(price_fallback_indexes)
+        if not isinstance(restock_watch, bool):
+            raise ValueError(f"restock_watch 必须是布尔值，实际值: {restock_watch!r}")
+        if (
+            not isinstance(restock_interval_s, int)
+            or isinstance(restock_interval_s, bool)
+            or restock_interval_s < RESTOCK_MIN_INTERVAL_S
+        ):
+            raise ValueError(
+                f"restock_interval_s 必须是 >= {RESTOCK_MIN_INTERVAL_S} 的整数"
+                f"（刷新过密易触发风控），实际值: {restock_interval_s!r}"
+            )
+        if (
+            not isinstance(restock_max_minutes, int)
+            or isinstance(restock_max_minutes, bool)
+            or restock_max_minutes <= 0
+        ):
+            raise ValueError(
+                f"restock_max_minutes 必须是正整数，实际值: {restock_max_minutes!r}"
+            )
+
         self.keyword = keyword.strip()
         self.users = users
         self.city = city
@@ -842,6 +888,10 @@ class Config:
             target_venue.strip() if isinstance(target_venue, str) else None
         )
         self.serial = serial.strip() if isinstance(serial, str) else None
+        self.price_fallback_indexes = price_fallback_indexes
+        self.restock_watch = restock_watch
+        self.restock_interval_s = restock_interval_s
+        self.restock_max_minutes = restock_max_minutes
 
     def to_dict(self):
         """Return the config as a plain dictionary for rewriting config.jsonc."""
@@ -869,6 +919,10 @@ class Config:
             "rush_skip_session": self.rush_skip_session,
             "rush_skip_price_dump": self.rush_skip_price_dump,
             "rush_aggressive_retry": self.rush_aggressive_retry,
+            "price_fallback_indexes": self.price_fallback_indexes,
+            "restock_watch": self.restock_watch,
+            "restock_interval_s": self.restock_interval_s,
+            "restock_max_minutes": self.restock_max_minutes,
         }
 
     @staticmethod
@@ -937,4 +991,8 @@ class Config:
             target_title=config.get("target_title"),
             target_venue=config.get("target_venue"),
             serial=serial,
+            price_fallback_indexes=config.get("price_fallback_indexes"),
+            restock_watch=config.get("restock_watch", False),
+            restock_interval_s=config.get("restock_interval_s", 45),
+            restock_max_minutes=config.get("restock_max_minutes", 120),
         )

@@ -55,5 +55,17 @@
   // 快速重试次数（不重建 driver）
   "fast_retry_count": 8,
   // 快速重试间隔（毫秒）
-  "fast_retry_interval_ms": 80
+  "fast_retry_interval_ms": 80,
+
+  // ── 售罄换档 / 盯回流（可选）──
+  // 目标票档(price_index)不可售时，按顺序改选的备选票档索引，例如 [2, 1]；
+  // "any" = 任意有票的票档；null = 不换档。开启后点票档前会先读一次票档列表（约 +0.1s），
+  // 绝不点击「缺货登记」等不可售票档。
+  "price_fallback_indexes": null,
+  // 全部可接受票档售罄后不退出，低频刷新等回流票（抢到后弹 macOS 通知，需手动付款）
+  "restock_watch": false,
+  // 盯回流刷新间隔（秒，实际 ±20% 随机抖动）；最小 10，过密易触发风控
+  "restock_interval_s": 45,
+  // 盯回流最长时间（分钟）；回流票多出现在开售后 15-30 分钟
+  "restock_max_minutes": 120
 }

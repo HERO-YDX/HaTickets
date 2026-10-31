@@ -90,6 +90,13 @@ class FastPipeline:
     def _confirm_page_ready(self) -> bool:
         """Detect confirm-page readiness with lighter-weight fallbacks."""
         bot = self._bot
+        # One dump (~115ms) instead of up to five serial u2 lookups (~250ms each
+        # for elements that are not on screen yet).
+        snapshot = bot._page_snapshot()
+        if snapshot is not None:
+            return snapshot.has_id("cn.damai:id/checkbox") or snapshot.has_text(
+                ("确认购买", "实名观演人", "立即提交")
+            )
         if bot._has_element(By.ID, "cn.damai:id/checkbox"):
             return True
         if bot._attendee_checkbox_elements():

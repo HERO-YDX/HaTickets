@@ -48,6 +48,13 @@ class RecoveryHelper:
     # Public API
     # ------------------------------------------------------------------
 
+    def _press_back(self) -> None:
+        # u2 key injection fails on Android 16; the shell keyevent works everywhere.
+        try:
+            self._device.shell("input keyevent 4")
+        except Exception:
+            self._device.press("back")
+
     def recover_to_detail_page(self) -> Dict[str, object]:
         """Attempt to recover to the detail/SKU page using a layered strategy.
 
@@ -65,7 +72,7 @@ class RecoveryHelper:
 
         # Layer 2 — deep back (up to 8 presses)
         for step in range(1, _MAX_BACK_STEPS + 1):
-            self._device.press("back")
+            self._press_back()
             self._probe.invalidate_cache()
             state = self._probe.probe_current_page(fast=True)
             page = state.get("page", "unknown")

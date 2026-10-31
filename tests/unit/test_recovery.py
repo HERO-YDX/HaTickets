@@ -54,7 +54,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "detail_page"
-        device.press.assert_not_called()
+        device.shell.assert_not_called()
         navigator.navigate_to_target_event.assert_not_called()
         # Only one probe call (the initial check).
         assert probe.probe_current_page.call_count == 1
@@ -69,7 +69,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "sku_page"
-        device.press.assert_not_called()
+        device.shell.assert_not_called()
 
     @patch("mobile.recovery.time")
     def test_one_back_reaches_detail(self, mock_time):
@@ -82,7 +82,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "detail_page"
-        device.press.assert_called_once_with("back")
+        device.shell.assert_called_once_with("input keyevent 4")
         probe.invalidate_cache.assert_called_once()
         navigator.navigate_to_target_event.assert_not_called()
 
@@ -101,7 +101,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "detail_page"
-        assert device.press.call_count == 5
+        assert device.shell.call_count == 5
         assert probe.invalidate_cache.call_count == 5
         navigator.navigate_to_target_event.assert_not_called()
 
@@ -118,7 +118,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "detail_page"
-        assert device.press.call_count == 2
+        assert device.shell.call_count == 2
         navigator.navigate_to_target_event.assert_called_once()
 
     @patch("mobile.recovery.time")
@@ -135,7 +135,7 @@ class TestRecoveryHelper:
         result = helper.recover_to_detail_page()
 
         assert result["page"] == "unknown"
-        assert device.press.call_count == _MAX_BACK_STEPS
+        assert device.shell.call_count == _MAX_BACK_STEPS
         navigator.navigate_to_target_event.assert_called_once()
 
     @patch("mobile.recovery.time")
@@ -151,3 +151,10 @@ class TestRecoveryHelper:
 
         assert mock_time.sleep.call_count == 2
         mock_time.sleep.assert_called_with(_BACK_DELAY)
+
+
+def test_press_back_falls_back_to_u2_when_shell_fails():
+    helper, device, _probe, _navigator = _build_helper([_make_state("detail_page")])
+    device.shell.side_effect = RuntimeError("no shell")
+    helper._press_back()
+    device.press.assert_called_once_with("back")
